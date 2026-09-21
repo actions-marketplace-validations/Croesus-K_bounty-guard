@@ -98,7 +98,8 @@ BG_APP_ID=1 BG_PRIVATE_KEY="$(cat app-key.pem)" BG_WEBHOOK_SECRET=*** BG_PORT=80
 ```
 
 注册 App（Webhook URL → `https://<host>/api/github/webhook`，订阅 Pull requests，权限 Pull requests: Read & write）后，
-服务器自动验签 → 换 installation token → 扫描 PR → 粘性评论。
+服务器自动验签 → 换 installation token → 扫描 PR → 粘性评论。与 CLI/Action 形态一致：`.bountyrc.json` 配置了 LLM 复核
+（`ai.enabled` 且非 off）时自动复核，未配置则纯规则；webhook 请求体超 5MB 直接 413。
 
 ### VS Code 扩展
 

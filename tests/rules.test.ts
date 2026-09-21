@@ -58,13 +58,18 @@ describe('xss-inner-html', () => {
 
 describe('xss-react-html', () => {
   it('动态内容注入 dangerouslySetInnerHTML 时命中', () => {
-    expect(hits('xss-react-html', 'const html = { __html: userContent };')).toBe(true);
+    expect(hits('xss-react-html', '<div dangerouslySetInnerHTML={{ __html: userContent }} />')).toBe(true);
     expect(hits('xss-react-html', '<div dangerouslySetInnerHTML={{ __html: makeHtml(x) }} />')).toBe(true);
   });
 
   it('静态字符串与经 sanitize 的内容不命中', () => {
-    expect(hits('xss-react-html', "const html = { __html: '静态富文本' };")).toBe(false);
+    expect(hits('xss-react-html', '<div dangerouslySetInnerHTML={{ __html: "静态富文本" }} />')).toBe(false);
     expect(hits('xss-react-html', '<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(x) }} />')).toBe(false);
+  });
+
+  it('标识符碰撞（__htmlText 等非 React 属性）不命中', () => {
+    expect(hits('xss-react-html', 'obj.__htmlText = userHtml;')).toBe(false);
+    expect(hits('xss-react-html', 'cache.__html = segment; // 无 dangerouslySetInnerHTML 上下文')).toBe(false);
   });
 });
 

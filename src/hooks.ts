@@ -24,6 +24,11 @@ export function renderPreCommitHook(options: PreCommitHookOptions): string {
     '#!/bin/sh',
     `# ${HOOK_MARKER}（bounty-guard init-hooks）—— 更新请重新执行 init-hooks --force`,
     `[ -n "$${skipEnv}" ] && exit 0`,
+    '# 预检：目标仓库没装 bounty-guard 时明确提示并放行，不让提交卡死在 npm 报错上',
+    'if ! npx --no-install bounty-guard --version >/dev/null 2>&1; then',
+    '  echo "bounty-guard 未安装（在仓库内运行 npm i -D bounty-guard 或 npx bounty-guard init-hooks），本次提交跳过扫描" >&2',
+    '  exit 0',
+    'fi',
     `npx --no-install bounty-guard scan --git${stagedFlag} --fail-on ${options.failOn}`,
     ''
   ].join('\n');

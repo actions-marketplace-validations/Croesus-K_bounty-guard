@@ -3,8 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  COMMENT_BODY_LIMIT,
   resolvePrNumber,
   toAnnotations,
+  truncateCommentBody,
   upsertStickyComment,
   writeSummaryFile
 } from '../src/github.js';
@@ -113,6 +115,29 @@ describe('upsertStickyComment', () => {
     const ctx = fetchStub(() => [{ id: 1, body: '普通评论' }], calls);
     expect(await upsertStickyComment(ctx, 7, '新报告')).toBe('created');
     expect(calls[1].init.method).toBe('POST');
+  });
+});
+
+describe('truncateCommentBody（评论 64KB 上限防 422）', () => {
+  it('未超限原样返回', () => {
+    expect(truncateCommentBody('短报告')).toBe('短报告');
+  });
+
+  it('超限时截断到上限内，尾部保留说明与粘性标记', () => {
+    const huge = 'x'.repeat(COMMENT_BODY_LIMIT + 5000);
+    const out = truncateCommentBody(huge);
+    expect(out.length).toBeLessThanOrEqual(COMMENT_BODY_LIMIT);
+    expect(out).toContain('已截断');
+    expect(out.endsWith(COMMENT_MARKER)).toBe(true);
+  });
+
+  it('upsertStickyComment 发送的正文经过截断', async () => {
+    const calls: Array<{ path: string; init: RequestInit }> = [];
+    const ctx = fetchStub(() => [{ id: 42, body: `旧的 ${COMMENT_MARKER}` }], calls);
+    await upsertStickyComment(ctx, 7, 'y'.repeat(COMMENT_BODY_LIMIT + 1000));
+    const sent = String(calls[1].init.body);
+    expect(sent.length).toBeLessThanOrEqual(COMMENT_BODY_LIMIT + 30); // JSON 包装的开销
+    expect(sent).toContain(COMMENT_MARKER);
   });
 });
 

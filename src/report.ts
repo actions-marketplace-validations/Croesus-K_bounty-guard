@@ -31,6 +31,21 @@ export interface ReportMeta {
   review?: { provider: string; confirmed: number; filtered: number; downgraded: number; unreviewed?: number };
 }
 
+/** 命中这些规则的片段在终端/Markdown 展示时做脱敏——扫描器绝不能成为泄露放大器 */
+const REDACTED_RULE_IDS = new Set(['hardcoded-secret']);
+
+/**
+ * 片段脱敏（只对密钥类规则启用，宁可多遮不漏）：
+ * ① 引号包裹、长度 ≥8 的字符串字面量 → 占位符；
+ * ② 无引号的裸 token（≥16 位的密钥形字符串，常见于 LLM 复核建议转述）→ 占位符。
+ */
+export function redactSnippet(ruleId: string, text: string): string {
+  if (!REDACTED_RULE_IDS.has(ruleId)) return text;
+  return text
+    .replace(/(["'`])[\s\S]{8,}?\1/g, (m) => `${m[0]}***（已脱敏）***${m[0]}`)
+    .replace(/\b[A-Za-z0-9_+=/.~-]{16,}\b/g, '***（已脱敏）***');
+}
+
 /** 渲染中文终端报告，按文件分组 */
 export function renderReport(findings: Finding[], meta: ReportMeta): string {
   const out: string[] = [];
@@ -64,9 +79,9 @@ export function renderReport(findings: Finding[], meta: ReportMeta): string {
               : ''
           : '';
         out.push(`  [${LABELS[f.severity]}] ${f.ruleId} · 第 ${f.line} 行${suffix}`);
-        out.push(`    ${f.snippet.trim()}`);
+        out.push(`    ${redactSnippet(f.ruleId, f.snippet.trim())}`);
         out.push(`    ⚠ ${f.message}`);
-        if (f.review?.fixSuggestion) out.push(`    💡 修复建议（复核）：${f.review.fixSuggestion}`);
+        if (f.review?.fixSuggestion) out.push(`    💡 修复建议（复核）：${redactSnippet(f.ruleId, f.review.fixSuggestion)}`);
         else if (f.fixHint) out.push(`    💡 ${f.fixHint}`);
       }
       out.push('');
@@ -109,11 +124,11 @@ export function renderMarkdownReport(findings: Finding[], meta: ReportMeta): str
       const fence = f.snippet.includes('```') ? '````' : '```';
       const lang = languageOf(f.file);
       out.push(fence + (lang === 'unknown' ? '' : lang));
-      out.push(f.snippet);
+      out.push(redactSnippet(f.ruleId, f.snippet));
       out.push(fence);
       out.push('');
       out.push(`- ⚠️ ${f.message}`);
-      if (f.review?.fixSuggestion) out.push(`- 💡 复核建议：${f.review.fixSuggestion}`);
+      if (f.review?.fixSuggestion) out.push(`- 💡 复核建议：${redactSnippet(f.ruleId, f.review.fixSuggestion)}`);
       else if (f.fixHint) out.push(`- 💡 ${f.fixHint}`);
       if (f.review?.verdict === 'unsure') out.push('- ❓ LLM 未能确证，保留原判');
       out.push('');
@@ -188,11 +203,11 @@ export interface MetricsRow {
   findings: string[];
 }
 
-/** 周报表格：配合 scripts/weekly-report.ts 定时生成 docs/metrics.md */
-export function renderMetricsTable(rows: MetricsRow[], date: string): string {
+/** 周报表格：配合 scripts/weekly-report.ts 定时生成 docs/metrics.md；failures 为扫描失败被跳过的样本 */
+export function renderMetricsTable(rows: MetricsRow[], date: string, failures: string[] = []): string {
   const totalAdded = rows.reduce((n, r) => n + r.addedLines, 0);
   const totalFindings = rows.reduce((n, r) => n + r.findings.length, 0);
-  return [
+  const out = [
     '# 误报率周报',
     '',
     `> 自动生成于 ${date} · 来源清单 \`scripts/metrics-prs.txt\` · 样本 ${rows.length} 个真实 PR`,
@@ -205,8 +220,13 @@ export function renderMetricsTable(rows: MetricsRow[], date: string): string {
     '| PR | 新增行 | 命中 |',
     '|---|---|---|',
     ...rows.map((r) => `| ${r.pr} | ${r.addedLines} | ${r.findings.length === 0 ? '0' : r.findings.join('<br>')} |`),
-    '',
-    '<sub>由 bounty-guard 自动生成，每周五更新</sub>',
     ''
-  ].join('\n');
+  ];
+  if (failures.length > 0) {
+    out.push(`> ⚠ 本周跳过 ${failures.length} 个无法扫描的样本：`);
+    for (const f of failures) out.push(`> - ${f}`);
+    out.push('');
+  }
+  out.push('<sub>由 bounty-guard 自动生成，每周五更新</sub>', '');
+  return out.join('\n');
 }

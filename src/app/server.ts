@@ -9,12 +9,14 @@
  *   - Webhook secret 与 BG_WEBHOOK_SECRET 一致（用于验签）
  */
 import { createHmac, createSign, timingSafeEqual } from 'node:crypto';
-import { createServer, type IncomingHttpHeaders } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { loadConfig, type BountyConfig } from '../config.js';
 import { fetchPrDiff, upsertStickyComment } from '../github.js';
 import { matchGlob } from '../glob.js';
 import { parseDiff } from '../diff.js';
+import { loadProvider } from '../llm/provider.js';
 import { renderMarkdownReport, type ReportMeta } from '../report.js';
+import { reviewFindings } from '../review.js';
 import { scanDiff } from '../scanner.js';
 
 function b64url(input: string | Buffer): string {
@@ -67,16 +69,38 @@ export function readPullRequestEvent(payload: Record<string, unknown>): PrEvent 
   return { repo: repository.full_name, pr: pull.number, installationId: installation.id, action };
 }
 
-/** 以 App JWT 换取 installation 的操作令牌 */
-export async function installationToken(jwt: string, installationId: number): Promise<string> {
-  const res = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/vnd.github+json' }
+/** installation token 交换的确定性超时——不假设 fetch 遵守 abort signal（与 github.ts 同一原则） */
+const INSTALL_TOKEN_TIMEOUT_MS = 10_000;
+
+/** 以 App JWT 换取 installation 的操作令牌（带确定性超时，公网部署必须收敛） */
+export async function installationToken(
+  jwt: string,
+  installationId: number,
+  timeoutMs: number = INSTALL_TOKEN_TIMEOUT_MS
+): Promise<string> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`获取 installation token 超时（${timeoutMs}ms）`));
+    }, timeoutMs);
   });
-  if (!res.ok) throw new Error(`获取 installation token 失败：HTTP ${res.status}`);
-  const data = (await res.json()) as { token?: string };
-  if (!data.token) throw new Error('installation token 响应缺少 token 字段');
-  return data.token;
+  try {
+    const pending = fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/vnd.github+json' },
+      signal: controller.signal
+    });
+    pending.catch(() => {}); // 防 timeout 赢得竞速后出现未处理拒绝
+    const res = (await Promise.race([pending, timeout])) as Response;
+    if (!res.ok) throw new Error(`获取 installation token 失败：HTTP ${res.status}`);
+    const data = (await res.json()) as { token?: string };
+    if (!data.token) throw new Error('installation token 响应缺少 token 字段');
+    return data.token;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export interface GhAppEnv {
@@ -97,7 +121,8 @@ export function readEnv(): GhAppEnv {
   return { appId, privateKey, webhookSecret, port };
 }
 
-async function processWebhook(
+/** 处理 pull_request webhook（导出供测试）：验签 → 采集 → 规则扫描 →（配置了 Key 则）LLM 复核 → 粘性评论 */
+export async function processWebhook(
   env: GhAppEnv,
   config: BountyConfig,
   body: string,
@@ -117,7 +142,7 @@ async function processWebhook(
   const token = await installationToken(jwt, event.installationId);
   const diffText = await fetchPrDiff({ token, repo: event.repo }, event.pr);
   const diff = parseDiff(diffText);
-  const findings = scanDiff(diff, {
+  let findings = scanDiff(diff, {
     ignore: config.ignore,
     skipTests: !config.scanTests,
     disabledRules: config.disabledRules
@@ -127,25 +152,60 @@ async function processWebhook(
     (sum, f) => sum + f.hunks.reduce((n, h) => n + h.lines.filter((l) => l.type === 'add').length, 0),
     0
   );
+  // 与 CLI / Action 形态对齐：配置了复核（ai.enabled 且非 off）就自动执行，永远只复核已有发现
+  const loaded = loadProvider(config);
+  let review: ReportMeta['review'];
+  if (!loaded.degraded) {
+    const outcome = await reviewFindings(findings, loaded.provider);
+    findings = outcome.findings;
+    review = {
+      provider: loaded.provider.name,
+      confirmed: outcome.findings.length,
+      filtered: outcome.filtered,
+      downgraded: outcome.downgraded,
+      unreviewed: outcome.unreviewed
+    };
+  }
   const meta: ReportMeta = {
     source: `PR #${event.pr}（${event.repo}）`,
     scannedFiles: scannable.length,
-    addedLines
+    addedLines,
+    review
   };
   const markdown = renderMarkdownReport(findings, meta);
   await upsertStickyComment({ token, repo: event.repo }, event.pr, markdown);
-  process.stderr.write(`[bounty-guard] PR #${event.pr} 扫描完成：${findings.length} 条告警\n`);
+  process.stderr.write(
+    `[bounty-guard] PR #${event.pr} 扫描完成：${findings.length} 条告警${review ? `（${review.provider} 复核）` : ''}\n`
+  );
 }
 
-export function startGhAppServer(env: GhAppEnv, config: BountyConfig): void {
+/** webhook 请求体上限：pull_request 事件极少超过 1MB，超限直接 413（公网部署防内存打爆） */
+export const MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
+
+/** 启动服务器；返回 Server 实例（测试用 ephemeral 端口），日志走 stderr */
+export function startGhAppServer(env: GhAppEnv, config: BountyConfig): Server {
   const server = createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/api/github/webhook') {
       res.writeHead(404).end();
       return;
     }
     const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let received = 0;
+    let rejected = false;
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      if (rejected) return;
+      if (received > MAX_WEBHOOK_BODY_BYTES) {
+        rejected = true;
+        chunks.length = 0; // 立刻丢弃已缓冲内容，不再为超大请求累计内存
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('payload too large');
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => {
+      if (rejected) return;
       const body = Buffer.concat(chunks).toString('utf8');
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('ok'); // webhook 先应答，扫描异步进行
@@ -157,4 +217,5 @@ export function startGhAppServer(env: GhAppEnv, config: BountyConfig): void {
   server.listen(env.port, () => {
     process.stderr.write(`bounty-guard GitHub App 服务器已启动：0.0.0.0:${env.port}\n`);
   });
+  return server;
 }

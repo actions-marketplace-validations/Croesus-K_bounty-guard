@@ -43,7 +43,7 @@ interface Row {
 }
 
 try {
-  const rows: Row[] = await Promise.all(
+  const settled = await Promise.allSettled(
     prs.map(async (arg) => {
       const parsed = arg.match(/^(.+)#(\d+)$/);
       if (!parsed) throw new Error(`无法解析 PR 标识：${arg}`);
@@ -65,11 +65,29 @@ try {
     })
   );
 
+  // 单个样本被删/转私不拖垮全周报告：成功的照常入表，失败的列进注记
+  const rows: Row[] = [];
+  const failures: string[] = [];
+  for (const [i, item] of settled.entries()) {
+    if (item.status === 'fulfilled') {
+      rows.push(item.value);
+    } else {
+      const reason = item.reason instanceof Error ? item.reason.message : String(item.reason);
+      failures.push(`${prs[i]}：${reason}`);
+      console.error(`⚠ 跳过 ${prs[i]}：${reason}`);
+    }
+  }
+  if (rows.length === 0) {
+    console.error('全部样本扫描失败，未生成周报');
+    process.exit(2);
+  }
+
   const date = new Date().toISOString().slice(0, 10);
-  const markdown = renderMetricsTable(rows, date);
+  const markdown = renderMetricsTable(rows, date, failures);
   writeFileSync(OUT_FILE, markdown);
   const totalFindings = rows.reduce((n, r) => n + r.findings.length, 0);
-  console.log(`✅ 已生成 ${OUT_FILE}（${prs.length} PR / 命中 ${totalFindings}）`);
+  const skipped = failures.length > 0 ? ` / 跳过 ${failures.length}` : '';
+  console.log(`✅ 已生成 ${OUT_FILE}（${rows.length} PR${skipped} / 命中 ${totalFindings}）`);
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(2);

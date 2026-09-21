@@ -167,6 +167,8 @@ export async function handleRpc(raw: string): Promise<string | null> {
     );
   }
   if (req.method.startsWith('notifications/')) return null;
+  // 协议心跳：个别客户端（如官方 Inspector 部分版本）连接后会先 ping，缺实现会报 -32601
+  if (req.method === 'ping') return JSON.stringify(resp(req.id ?? null, {}));
   if (req.method === 'tools/list') return JSON.stringify(resp(req.id ?? null, { tools: TOOL_DEFS }));
   if (req.method === 'tools/call') {
     const params = req.params ?? {};

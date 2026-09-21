@@ -1,0 +1,45 @@
+{
+  "mcpServers": {
+    "bounty-guard": {
+      "command": "npx",
+      "args": ["-y", "bounty-guard", "mcp"],
+      "description": "AI 代码安全审查 MCP server —— 守住每一行 diff",
+      "tools": [
+        {
+          "name": "scan_git",
+          "description": "扫描指定目录的未提交/已暂存变更（只审新增行），返回中文安全报告与门禁结论",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "cwd": { "type": "string", "description": "项目目录，缺省为当前工作目录" },
+              "staged": { "type": "boolean", "description": "只扫描已暂存变更" },
+              "ai": { "type": "boolean", "description": "启用 LLM 复核（需已配置 Key）" }
+            }
+          }
+        },
+        {
+          "name": "scan_diff",
+          "description": "扫描一段 unified diff 文本，返回中文安全报告",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "diff": { "type": "string", "description": "unified diff 全文" },
+              "ai": { "type": "boolean", "description": "启用 LLM 复核" }
+            },
+            "required": ["diff"]
+          }
+        },
+        {
+          "name": "list_rules",
+          "description": "列出全部内置安全规则（id、严重度、说明）",
+          "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+          "name": "doctor",
+          "description": "查看当前目录的 bounty-guard 配置摘要",
+          "inputSchema": { "type": "object", "properties": { "cwd": { "type": "string" } } }
+        }
+      ]
+    }
+  }
+}

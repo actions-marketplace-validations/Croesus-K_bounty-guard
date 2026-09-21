@@ -193,9 +193,9 @@ GitHub Action（薄壳）──┘
 
 ### ① 形态拓展
 
-- [ ] MCP Server 形态：任何 AI 编程助手可在写入瞬间调用扫描（闭环 Mimosa 起点）
-- [ ] GitHub App 形态：替代 composite action，检查更快、支持私有仓库
-- [ ] IDE 诊断（VS Code 扩展，Diagnostics API）
+- [x] MCP Server 形态：任何 AI 编程助手可在写入瞬间调用扫描（闭环 Mimosa 起点）
+- [x] GitHub App 形态：替代 composite action，检查更快、支持私有仓库
+- [x] IDE 诊断（VS Code 扩展，Diagnostics API）
 
 ### ② 产品纵深
 
@@ -229,6 +229,25 @@ GitHub Action（薄壳）──┘
 
 **验收**：152 项测试全绿（新增 19 项）。三形态后续：MCP 待 agent 用户实测；
 GitHub App 需注册 App 并择机托管；VS Code 扩展待 vsce 打包上架。
+
+## v0.2.1：稳健性批次（2026-09-06 落地，触发于 09-04 复查）—— 复查遗留 15 条代码修复落地
+
+- [x] **报告脱敏**：hardcoded-secret 告警的片段与复核建议在终端/Markdown 展示时脱敏——扫描器不再成为泄露放大器
+- [x] **粘性评论 64KB 截断**：超长报告安全截断且保留粘性标记，防 422 连带门禁失败
+- [x] **git diff 加固**：全部 diff 采集带 `--no-ext-diff --no-color`（外部 diff 工具 / color.ui=always 不再破坏解析）
+- [x] **CLI 收口**：--format 校验前移到扫描之前（拼错不再白烧 LLM 调用）；parseAsync 顶层兜底，异常不裸栈
+- [x] **gh-app 加固**：webhook 请求体 >5MB 直接 413；installation token 交换带确定性超时；接入 AI 复核（与 CLI/Action 行为对齐，README 已说明）
+- [x] **VS Code 扩展**：保存防抖 + 并发去重 + CLI 超时，连击保存不打架
+- [x] **pre-commit 预检**：目标仓库未安装包时提示放行，不卡死首次提交
+- [x] **周报健壮性**：Promise.allSettled——单个样本失败只跳过并入注记，不拖垮全周报告
+- [x] **xss-react-html 收紧**：必须出现完整 dangerouslySetInnerHTML 属性名，`obj.__htmlText` 等标识符碰撞不再误报
+- [x] **MCP ping**：协议心跳返回空结果，兼容部分客户端（原先 -32601）
+- [x] **workflow 超时**：CI / 周报 / prompt-audit 均设 timeout-minutes，挂死不占满 6 小时
+- [x] **action.yml 减负**：`npx bounty-guard@<版本>` 固定运行，免 checkout 与现构建（每次 CI 省 30-60 秒）
+- [x] 版本 0.2.1
+
+**验收**：172 项测试全绿（新增 20 项：脱敏 4、评论截断 3、git 采集加固 4、gh-app 5、规则收紧 1、MCP ping 1、钩子预检 1、周报注记 1）。
+复查 16 条中 15 条代码修复 + 第 16 条随 GitHub Release / Marketplace 发布解决（2026-09-04 晚），遗留清零。
 
 ## v0.1.3：表达力批次（2026-08-31）
 

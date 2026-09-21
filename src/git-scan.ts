@@ -26,6 +26,12 @@ export function runGit(args: string[], cwd: string): Promise<string> {
   });
 }
 
+/**
+ * diff 读取加固：禁用外部 diff 工具与 ANSI 着色。
+ * 用户配置 diff.external 或 color.ui=always 时，输出会混入非标准内容导致解析错乱。
+ */
+export const GIT_DIFF_FLAGS = ['--no-ext-diff', '--no-color'] as const;
+
 /** 未跟踪文件 → 整文件皆视为新增行 */
 function fileToParsedFile(path: string, content: string): ParsedFile {
   const lines = content.split(/\r?\n/);
@@ -42,10 +48,10 @@ function fileToParsedFile(path: string, content: string): ParsedFile {
 export async function collectGitChanges(cwd: string): Promise<ParsedDiff> {
   let text: string;
   try {
-    text = await runGit(['diff', 'HEAD'], cwd);
+    text = await runGit(['diff', ...GIT_DIFF_FLAGS, 'HEAD'], cwd);
   } catch {
     // 尚无首次提交时 HEAD 不存在，改用索引对比（新仓库的变更通常已暂存）
-    text = await runGit(['diff', '--cached'], cwd);
+    text = await runGit(['diff', ...GIT_DIFF_FLAGS, '--cached'], cwd);
   }
   const parsed = parseDiff(text);
   const status = await runGit(['status', '--porcelain', '-uall'], cwd);
@@ -67,5 +73,5 @@ export async function collectGitChanges(cwd: string): Promise<ParsedDiff> {
 
 /** 组装「已暂存变更」：git diff --cached（pre-commit 场景，不含未跟踪文件） */
 export async function collectStagedChanges(cwd: string): Promise<ParsedDiff> {
-  return parseDiff(await runGit(['diff', '--cached'], cwd));
+  return parseDiff(await runGit(['diff', ...GIT_DIFF_FLAGS, '--cached'], cwd));
 }

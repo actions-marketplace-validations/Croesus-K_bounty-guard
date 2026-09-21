@@ -121,6 +121,10 @@ program
       if (!options.git && !options.diff) throw new UsageError(USAGE_HINT);
       if (options.git && options.diff) throw new UsageError('两种扫描来源互斥，只能二选一');
       if (options.staged && !options.git) throw new UsageError('--staged 需要与 --git 搭配使用');
+      const format = options.format ?? 'text';
+      if (!(FORMATS as readonly string[]).includes(format)) {
+        throw new UsageError(`--format 取值无效：${format}（可选 ${FORMATS.join(' | ')}）`);
+      }
       const config = loadConfig();
       const failOn = resolveFailOn(config, options.failOn);
 
@@ -132,7 +136,7 @@ program
           diff = parseDiff(readFileSync(options.diff, 'utf8'));
           source = `diff 文件 ${options.diff}`;
         } else if (options.staged) {
-          diff = parseDiff(await runGit(['diff', '--cached'], cwd));
+          diff = await collectStagedChanges(cwd);
           source = 'git 已暂存变更';
         } else {
           diff = await collectGitChanges(cwd);
@@ -143,10 +147,6 @@ program
       }
 
       const outcome = await scanAndReview(diff, config, Boolean(options.ai), Boolean(options.ai));
-      const format = options.format ?? 'text';
-      if (!(FORMATS as readonly string[]).includes(format)) {
-        throw new UsageError(`--format 取值无效：${format}（可选 ${FORMATS.join(' | ')}）`);
-      }
       const meta = {
         source,
         scannedFiles: outcome.scannedFiles,
@@ -366,4 +366,8 @@ program
     }
   });
 
-program.parseAsync();
+// 顶层兜底：UsageError 之外的一切异常收敛为一句错误 + 退出码 1，不裸栈刷屏
+program.parseAsync(process.argv).catch((err: unknown) => {
+  console.error(`bounty-guard 异常退出：${err instanceof Error ? err.message : String(err)}`);
+  process.exitCode = 1;
+});

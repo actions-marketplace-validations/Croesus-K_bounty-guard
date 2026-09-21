@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { renderMarkdownReport, renderMetricsTable, renderReport, renderSarif, shouldFail } from '../src/report.js';
+import {
+  redactSnippet,
+  renderMarkdownReport,
+  renderMetricsTable,
+  renderReport,
+  renderSarif,
+  shouldFail
+} from '../src/report.js';
 import type { Finding, Severity } from '../src/types.js';
 
 function finding(severity: Severity, file = 'src/a.js', line = 3): Finding {
@@ -163,6 +170,53 @@ describe('renderMetricsTable', () => {
     expect(text).toContain('| 命中 | 1 |');
     expect(text).toContain('| expressjs/express#7437 | 400 | 0 |');
     expect(text).toContain('low/plain-http/src/a.js:3');
+    expect(text).not.toContain('跳过');
+  });
+
+  it('有失败样本时附跳过注记，不影响成功样本统计', () => {
+    const text = renderMetricsTable(
+      [{ pr: 'expressjs/express#7437', addedLines: 400, findings: [] }],
+      '2026-09-04',
+      ['axios/axios#11175：HTTP 404']
+    );
+    expect(text).toContain('本周跳过 1 个无法扫描的样本');
+    expect(text).toContain('axios/axios#11175：HTTP 404');
+    expect(text).toContain('| 新增行 | 400 |');
+  });
+});
+
+describe('redactSnippet（密钥类告警展示脱敏）', () => {
+  const secretSnippet = 'const apiKey = "sk-live-abcdef1234567890";';
+
+  it('hardcoded-secret 片段中的长字面量被替换为占位符', () => {
+    const redacted = redactSnippet('hardcoded-secret', secretSnippet);
+    expect(redacted).not.toContain('sk-live-abcdef1234567890');
+    expect(redacted).toContain('const apiKey');
+    expect(redacted).toContain('***（已脱敏）***');
+  });
+
+  it('短字面量与非密钥规则不受影响', () => {
+    expect(redactSnippet('hardcoded-secret', 'const port = "8080";')).toBe('const port = "8080";');
+    expect(redactSnippet('xss-inner-html', secretSnippet)).toBe(secretSnippet);
+  });
+
+  it('终端报告不回显密钥明文，修复建议同样脱敏', () => {
+    const f = finding('high');
+    f.ruleId = 'hardcoded-secret';
+    f.snippet = secretSnippet;
+    f.review = { verdict: 'confirmed', explanation: '真密钥', fixSuggestion: '删除 sk-live-abcdef1234567890 并轮换' };
+    const text = renderReport([f], { source: 's', scannedFiles: 1, addedLines: 1 });
+    expect(text).not.toContain('sk-live-abcdef1234567890');
+    expect(text).toContain('💡 修复建议（复核）：删除 ***（已脱敏）*** 并轮换');
+  });
+
+  it('Markdown 报告（PR 评论）同样脱敏', () => {
+    const f = finding('high');
+    f.ruleId = 'hardcoded-secret';
+    f.snippet = secretSnippet;
+    const md = renderMarkdownReport([f], { source: 'PR #1', scannedFiles: 1, addedLines: 1 });
+    expect(md).not.toContain('sk-live-abcdef1234567890');
+    expect(md).toContain('***（已脱敏）***');
   });
 });
 

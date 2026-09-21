@@ -1,6 +1,6 @@
 {
   "name": "bounty-guard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AI 代码安全审查助手 —— 规则引擎初筛 + LLM 复核，守住每一行 diff",
   "type": "module",
   "license": "MIT",

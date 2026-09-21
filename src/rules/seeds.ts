@@ -56,15 +56,18 @@ const XSS_REACT_HTML: Rule = {
   fixHint: '优先用普通 children 渲染；确需富文本时先经 DOMPurify.sanitize 等白名单转义',
   detect(ctx) {
     const code = stripLineComment(ctx.content);
+    // 必须出现 React 的完整属性名，避免 obj.__htmlText 等标识符碰撞误报
+    if (!/\bdangerouslySetInnerHTML\b/.test(code)) return false;
     const at = code.indexOf('__html');
     if (at === -1) return false; // 未出现 React 的 html 属性
-    const value = code.slice(at + '__html'.length).replace(/^[:=\s]+/, '');
-    if (value === '') return false; // 跨行属性：保守不报
+    const raw = code.slice(at + '__html'.length).replace(/^[:=\s{}]+/, '');
+    if (raw === '') return false; // 跨行属性：保守不报
+    const value = raw.split('}')[0].trim(); // JSX 属性值取到闭合 }} 为止
+    if (value === '') return false;
     // 推荐姿势（经 sanitize）与纯静态字符串不报
     if (/sanitiz/i.test(value)) return false;
-    const trimmed = value.replace(/[;,}\s]+$/, '');
-    const staticLiteral = /^(?:'[^']*'|"[^"]*"|`[^`]*`)$/.test(trimmed);
-    if (staticLiteral && !trimmed.includes('${')) return false;
+    const staticLiteral = /^(?:'[^']*'|"[^"]*"|`[^`]*`)$/.test(value);
+    if (staticLiteral && !value.includes('${')) return false;
     return true;
   }
 };

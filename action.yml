@@ -24,27 +24,17 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: 拉取 bounty-guard 源码
-      uses: actions/checkout@v4
-      with:
-        repository: Croesus-K/bounty-guard
-        path: .bounty-guard-src
-
     - name: 准备 Node
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: 构建 CLI
-      run: cd .bounty-guard-src && npm ci && npm run build
-      shell: bash
-
-    - name: 扫描 PR 并发布粘性评论
+    - name: 扫描 PR 并发布粘性评论（npx 固定版本，免 checkout 与构建）
       run: |
         ARGS="--fail-on $FAIL_ON --summary --annotations"
         if [ "$AI" = 'true' ]; then ARGS="$ARGS --ai"; fi
         if [ -n "$PR_NUMBER" ]; then ARGS="$ARGS --pr $PR_NUMBER"; fi
-        node .bounty-guard-src/dist/index.js pr-comment $ARGS
+        npx --yes bounty-guard@0.2.1 pr-comment $ARGS
         if [ -f .bounty-guard-summary.md ]; then
           cat .bounty-guard-summary.md >> "${GITHUB_STEP_SUMMARY}"
         fi

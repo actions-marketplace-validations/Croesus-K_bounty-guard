@@ -68,6 +68,14 @@ describe('MCP 服务器（JSON-RPC over stdio）', () => {
     expect(await handleRpc('{not json')).toBeNull();
   });
 
+  it('ping 心跳返回空结果而非 -32601', async () => {
+    const res = JSON.parse(
+      (await handleRpc(JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'ping' }))) ?? '{}'
+    );
+    expect(res.error).toBeUndefined();
+    expect(res.result).toEqual({});
+  });
+
   it('callTool doctor 返回配置摘要', async () => {
     const { text } = await callTool('doctor', {});
     expect(text).toContain('Node：');

@@ -17,6 +17,14 @@ describe('renderPreCommitHook', () => {
   it('staged 模式带 --staged 标记', () => {
     expect(renderPreCommitHook({ failOn: 'high', staged: true })).toContain('scan --git --staged --fail-on high');
   });
+
+  it('内置包未安装预检：提示后放行而不是卡死提交', () => {
+    const hook = renderPreCommitHook({ failOn: 'high', staged: true });
+    expect(hook).toContain('npx --no-install bounty-guard --version >/dev/null 2>&1');
+    expect(hook).toContain('本次提交跳过扫描');
+    // 预检在扫描命令之前
+    expect(hook.indexOf('--version')).toBeLessThan(hook.indexOf('scan --git'));
+  });
 });
 
 describe('installPreCommitHook / uninstallPreCommitHook', () => {

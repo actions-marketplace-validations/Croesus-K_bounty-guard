@@ -99,6 +99,18 @@ interface IssueComment {
   body?: string;
 }
 
+/** GitHub 评论正文上限：超出该长度 API 直接 422，评论发不出去还连带门禁失败 */
+export const COMMENT_BODY_LIMIT = 65536;
+
+/** 超长评论安全截断：保留头部与粘性标记（更新识别全靠标记），尾部附截断说明 */
+export function truncateCommentBody(body: string, limit: number = COMMENT_BODY_LIMIT): string {
+  if (body.length <= limit) return body;
+  const notice =
+    '\n\n> ⚠️ 发现过多，报告超出评论长度上限已截断；完整内容请减少单次变更规模，或在本地运行 `bounty-guard scan --git` 查看。';
+  const tail = `${notice}\n${COMMENT_MARKER}`;
+  return body.slice(0, Math.max(0, limit - tail.length)) + tail;
+}
+
 /** 粘性评论：跨页查找带标记的历史评论，找到则更新，找不到才新建（重复扫描不刷屏） */
 export async function upsertStickyComment(
   ctx: GithubContext,
@@ -107,6 +119,7 @@ export async function upsertStickyComment(
   marker: string = COMMENT_MARKER
 ): Promise<'created' | 'updated'> {
   const pr = assertPrNumber(prNumber);
+  const safeBody = truncateCommentBody(body);
   const base = repoApiUrl(ctx, `/issues/${pr}`);
   let page = 1;
   let existing: IssueComment | undefined;
@@ -123,13 +136,13 @@ export async function upsertStickyComment(
   if (existing) {
     await githubJson(ctx, `${base}/comments/${existing.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ body })
+      body: JSON.stringify({ body: safeBody })
     });
     return 'updated';
   }
   await githubJson(ctx, `${base}/comments`, {
     method: 'POST',
-    body: JSON.stringify({ body })
+    body: JSON.stringify({ body: safeBody })
   });
   return 'created';
 }
